@@ -2,76 +2,73 @@
 
 import streamlit as st
 import yfinance as yf
-import numpy as np
 import pandas as pd
+import numpy as np
 from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
-import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Stock Price Predictor", layout="wide")
-st.title("📈 Stock Price Prediction App")
 
-# --- User Input ---
-tickers_input = st.text_input(
-    "Enter stock ticker(s) separated by commas (e.g., AAPL, MSFT, GOOGL):"
-).upper()
+st.title("📈 Stock Price Predictor")
+st.write("Enter a stock ticker and get its predicted closing prices.")
 
-start_date = st.date_input("Start date", value=pd.to_datetime("2009-01-01"))
-end_date = st.date_input("End date", value=pd.to_datetime("2023-01-01"))
+# Input ticker
+user_input = st.text_input("Enter Stock Ticker", value="AAPL").upper()
 
-if not tickers_input:
+# Date range
+start = "2009-01-01"
+end = "2023-01-01"
+
+if user_input.strip() == "":
     st.warning("Please enter at least one valid stock ticker!")
-    st.stop()
-
-tickers = [ticker.strip() for ticker in tickers_input.split(",")]
-
-# --- Load trained model ---
-try:
-    model = load_model("keras_model.h5")
-except Exception as e:
-    st.error(f"Error loading model: {e}")
-    st.stop()
-
-# --- Process each ticker ---
-for ticker_symbol in tickers:
-    st.header(f"Ticker: {ticker_symbol}")
-
-    # --- Download stock data ---
+else:
+    # Load trained model safely
     try:
-        df = yf.download(ticker_symbol, start=start_date, end=end_date, auto_adjust=True)
+        model = load_model("keras_model.h5", compile=False)
+        st.success("Model loaded successfully!")
     except Exception as e:
-        st.error(f"Error fetching data for {ticker_symbol}: {e}")
-        continue
+        st.error(f"Error loading model: {e}")
+        st.stop()
 
-    if df.empty:
-        st.error(f"No data found for ticker '{ticker_symbol}'")
-        continue
+    # Fetch data with yfinance
+    try:
+        df = yf.download(user_input, start=start, end=end, threads=False)
+        if df.empty:
+            st.error(f"No data found for ticker '{user_input}'")
+            st.stop()
+    except Exception as e:
+        st.error(f"Failed to download ticker '{user_input}': {e}")
+        st.stop()
 
-    st.subheader(f"Data from {start_date} to {end_date}")
+    # Show basic data
+    st.subheader(f"Data for {user_input} from {start} to {end}")
     st.write(df.describe())
+    st.line_chart(df["Close"])
 
-    # --- Prepare data for LSTM ---
+    # Preprocess data for prediction
     scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(df['Close'].values.reshape(-1, 1))
+    scaled_close = scaler.fit_transform(df["Close"].values.reshape(-1, 1))
 
-    look_back = 60
-    X_test = []
-    for i in range(look_back, len(scaled_data)):
-        X_test.append(scaled_data[i - look_back:i, 0])
-    X_test = np.array(X_test)
-    X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+    # Prepare input for model (last 60 days)
+    def create_dataset(data, time_step=60):
+        X, y = [], []
+        for i in range(time_step, len(data)):
+            X.append(data[i-time_step:i, 0])
+            y.append(data[i, 0])
+        return np.array(X), np.array(y)
 
-    # --- Make predictions ---
-    predicted_prices = model.predict(X_test)
-    predicted_prices = scaler.inverse_transform(predicted_prices)
+    X, y_true = create_dataset(scaled_close)
+    X = X.reshape(X.shape[0], X.shape[1], 1)  # reshape for LSTM
 
-    # --- Plot actual vs predicted ---
-    st.subheader("Actual vs Predicted Prices")
-    plt.figure(figsize=(12, 6))
-    plt.plot(df['Close'].values[look_back:], color='blue', label='Actual Price')
-    plt.plot(predicted_prices, color='red', label='Predicted Price')
-    plt.title(f"{ticker_symbol} Stock Price Prediction")
-    plt.xlabel("Time")
-    plt.ylabel("Price")
-    plt.legend()
-    st.pyplot(plt)
+    # Make predictions
+    y_pred = model.predict(X)
+    y_pred = scaler.inverse_transform(y_pred.reshape(-1, 1))
+    y_true = scaler.inverse_transform(y_true.reshape(-1, 1))
+
+    # Display predictions
+    st.subheader("Predicted vs Actual Closing Prices")
+    pred_df = pd.DataFrame({
+        "Actual": y_true.flatten(),
+        "Predicted": y_pred.flatten()
+    })
+    st.line_chart(pred_df)
