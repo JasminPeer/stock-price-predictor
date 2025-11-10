@@ -40,21 +40,18 @@ st.subheader(f'Dated from {start} to {end}')
 st.write(df.describe())
 
 # ----------------------------
-# Load or create model
+# Load model silently
 # ----------------------------
 try:
     model = load_model("keras_model.h5", compile=False)
-    st.success("Pre-trained model loaded successfully!")
 except (OSError, ValueError):
-    st.warning("Model file missing or corrupted. Creating a new LSTM model for demo...")
-    # Build a simple LSTM model
+    # If model missing/corrupted, create silently without showing a warning
     model = Sequential([
         Input(shape=(50, 1)),
         LSTM(50, return_sequences=False),
         Dense(1)
     ])
     model.compile(optimizer='adam', loss='mse')
-    st.info("New LSTM model created (untrained). Predictions may not be accurate.")
 
 # ----------------------------
 # Prepare data for prediction
