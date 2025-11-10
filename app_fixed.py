@@ -1,99 +1,64 @@
-# import libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from keras.models import load_model
+# app_fixed.py
+
 import streamlit as st
 import yfinance as yf
+import pandas as pd
+import numpy as np
+from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
 
-# define start and end dates
+st.title("📈 Stock Closing Price Prediction")
+
+# --- User input ---
+user_input = st.text_input("Enter Stock Ticker (e.g., AAPL, GOOGL):").upper()
+
 start = "2009-01-01"
 end = "2023-01-01"
 
-# Streamlit title
-st.title('📈 Stock Closing Price Prediction')
+if not user_input:
+    st.warning("Please enter at least one valid stock ticker!")
+    st.stop()
 
-# user input
-user_input = st.text_input('Enter Stock Ticker', 'AAPL')  # default to AAPL
-
-# fetch data safely
+# --- Download stock data ---
 try:
-    df = yf.download(user_input, start=start, end=end, threads=False)
+    df = yf.download(user_input, start=start, end=end, threads=False, auto_adjust=True)
 except Exception as e:
-    st.error(f"Failed to download ticker '{user_input}': {e}")
+    st.error(f"Error fetching data for {user_input}: {e}")
     st.stop()
 
 if df.empty:
-    st.warning(f"No data found for ticker '{user_input}'")
+    st.error(f"No data found for ticker '{user_input}'")
     st.stop()
 
-# display data
-st.subheader('Dated from 1st Jan, 2009 to 1st Jan, 2023')
+st.subheader(f'Data from {start} to {end}')
 st.write(df.describe())
 
-# first plot
-st.subheader('Closing Price Vs Time Chart')
-fig1 = plt.figure(figsize=(12, 6))
-plt.plot(df['Close'])
-st.pyplot(fig1)
-
-# moving averages
-ma100 = df['Close'].rolling(100).mean()
-ma200 = df['Close'].rolling(200).mean()
-
-# second plot
-st.subheader('Closing Price Vs Time Chart with 100 days Moving Average')
-fig2 = plt.figure(figsize=(12, 6))
-plt.plot(df['Close'], 'r', label="Per Day Closing")
-plt.plot(ma100, 'g', label="Moving Average 100")
-plt.legend()
-st.pyplot(fig2)
-
-# third plot
-st.subheader('Closing Price Vs Time Chart with 100 and 200 days Moving Average')
-fig3 = plt.figure(figsize=(12, 6))
-plt.plot(ma200, 'b', label="Moving Average 200")
-plt.plot(ma100, 'g', label="Moving Average 100")
-plt.legend()
-st.pyplot(fig3)
-
-# split data
-train_df = df['Close'][:int(len(df)*0.85)].to_frame()
-test_df = df['Close'][int(len(df)*0.85):].to_frame()
-
-scaler = MinMaxScaler(feature_range=(0, 1))
-train_df_arr = scaler.fit_transform(train_df)
-
-# load trained model safely
+# --- Load trained model ---
 try:
-    model = load_model('keras_model.h5', compile=False)
+    model = load_model('keras_model.h5')  # Make sure model was saved without 'time_major'
 except Exception as e:
-    st.error(f"Failed to load Keras model: {e}")
+    st.error(f"Failed to load model: {e}")
     st.stop()
 
-# prepare test data
-past_100_days = train_df.tail(100)
-final_df = pd.concat([past_100_days, test_df], ignore_index=True)
-input_data = scaler.transform(final_df)
+# --- Prepare data for prediction ---
+scaler = MinMaxScaler(feature_range=(0,1))
+close_prices = df['Close'].values.reshape(-1,1)
+scaled_data = scaler.fit_transform(close_prices)
 
-x_test = []
-y_test = []
-for i in range(100, input_data.shape[0]):
-    x_test.append(input_data[i-100:i])
-    y_test.append(input_data[i, 0])
-x_test, y_test = np.array(x_test), np.array(y_test)
+# Predict last 60 days to forecast next day
+look_back = 60
+X_test = []
+for i in range(look_back, len(scaled_data)):
+    X_test.append(scaled_data[i-look_back:i, 0])
 
-# predictions
-y_pred = model.predict(x_test)
-scale_factor = 1 / scaler.scale_[0]
-y_pred = y_pred * scale_factor
-y_test = y_test * scale_factor
+X_test = np.array(X_test)
+X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
 
-# final plot
-st.subheader('Predicted Vs Original')
-fig4 = plt.figure(figsize=(12, 6))
-plt.plot(y_test, 'g', label="Original Price")
-plt.plot(y_pred, 'r', label="Predicted Price")
-plt.legend()
-st.pyplot(fig4)
+predicted_prices = model.predict(X_test)
+predicted_prices = scaler.inverse_transform(predicted_prices)
+
+st.subheader(f"Predicted Closing Prices (last {len(predicted_prices)} days)")
+st.line_chart(predicted_prices)
+
+st.subheader("Actual Closing Prices")
+st.line_chart(close_prices[look_back:])
