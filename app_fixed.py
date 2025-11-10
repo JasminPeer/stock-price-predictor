@@ -1,74 +1,86 @@
-# app_fixed.py
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from tensorflow.keras.models import load_model
-from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Input
 
-st.set_page_config(page_title="Stock Price Predictor", layout="wide")
+# ----------------------------
+# App Title
+# ----------------------------
+st.title("📈 Stock Closing Price Prediction")
 
-st.title("📈 Stock Price Predictor")
-st.write("Enter a stock ticker and get its predicted closing prices.")
+# ----------------------------
+# User Input
+# ----------------------------
+user_input = st.text_input("Enter Stock Ticker (e.g., AAPL, MSFT)")
 
-# Input ticker
-user_input = st.text_input("Enter Stock Ticker", value="AAPL").upper()
-
-# Date range
 start = "2009-01-01"
 end = "2023-01-01"
 
-if user_input.strip() == "":
+if not user_input:
     st.warning("Please enter at least one valid stock ticker!")
-else:
-    # Load trained model safely
-    try:
-        model = load_model("keras_model.h5", compile=False)
-        st.success("Model loaded successfully!")
-    except Exception as e:
-        st.error(f"Error loading model: {e}")
-        st.stop()
+    st.stop()
 
-    # Fetch data with yfinance
-    try:
-        df = yf.download(user_input, start=start, end=end, threads=False)
-        if df.empty:
-            st.error(f"No data found for ticker '{user_input}'")
-            st.stop()
-    except Exception as e:
-        st.error(f"Failed to download ticker '{user_input}': {e}")
-        st.stop()
+# ----------------------------
+# Download stock data safely
+# ----------------------------
+try:
+    df = yf.download(user_input, start=start, end=end, threads=False)
+except Exception as e:
+    st.error(f"Failed to get ticker '{user_input}': {e}")
+    st.stop()
 
-    # Show basic data
-    st.subheader(f"Data for {user_input} from {start} to {end}")
-    st.write(df.describe())
-    st.line_chart(df["Close"])
+if df.empty:
+    st.error(f"No data found for ticker '{user_input}'")
+    st.stop()
 
-    # Preprocess data for prediction
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_close = scaler.fit_transform(df["Close"].values.reshape(-1, 1))
+st.subheader(f'Dated from {start} to {end}')
+st.write(df.describe())
 
-    # Prepare input for model (last 60 days)
-    def create_dataset(data, time_step=60):
-        X, y = [], []
-        for i in range(time_step, len(data)):
-            X.append(data[i-time_step:i, 0])
-            y.append(data[i, 0])
-        return np.array(X), np.array(y)
+# ----------------------------
+# Load or create model
+# ----------------------------
+try:
+    model = load_model("keras_model.h5", compile=False)
+    st.success("Pre-trained model loaded successfully!")
+except (OSError, ValueError):
+    st.warning("Model file missing or corrupted. Creating a new LSTM model for demo...")
+    # Build a simple LSTM model
+    model = Sequential([
+        Input(shape=(50, 1)),
+        LSTM(50, return_sequences=False),
+        Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mse')
+    st.info("New LSTM model created (untrained). Predictions may not be accurate.")
 
-    X, y_true = create_dataset(scaled_close)
-    X = X.reshape(X.shape[0], X.shape[1], 1)  # reshape for LSTM
+# ----------------------------
+# Prepare data for prediction
+# ----------------------------
+close_prices = df['Close'].values
+scaled_prices = (close_prices - close_prices.min()) / (close_prices.max() - close_prices.min())
 
-    # Make predictions
-    y_pred = model.predict(X)
-    y_pred = scaler.inverse_transform(y_pred.reshape(-1, 1))
-    y_true = scaler.inverse_transform(y_true.reshape(-1, 1))
+def create_sequences(data, seq_length=50):
+    X, y = [], []
+    for i in range(len(data) - seq_length):
+        X.append(data[i:i+seq_length])
+        y.append(data[i+seq_length])
+    return np.array(X), np.array(y)
 
-    # Display predictions
-    st.subheader("Predicted vs Actual Closing Prices")
-    pred_df = pd.DataFrame({
-        "Actual": y_true.flatten(),
-        "Predicted": y_pred.flatten()
-    })
-    st.line_chart(pred_df)
+seq_length = 50
+X, y = create_sequences(scaled_prices, seq_length)
+X = X.reshape((X.shape[0], X.shape[1], 1))
+
+# ----------------------------
+# Make predictions
+# ----------------------------
+predictions = model.predict(X)
+predictions_rescaled = predictions * (close_prices.max() - close_prices.min()) + close_prices.min()
+
+st.subheader("Predicted Closing Prices")
+st.line_chart(predictions_rescaled)
+
+st.subheader("Actual Closing Prices")
+st.line_chart(close_prices[seq_length:])
